@@ -89,3 +89,12 @@ def root():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+# ============================================================
+# AUTO-SEED on startup (only if DB is empty)
+# ============================================================
+from app.seed import seed as _seed
+
+try:
+    _seed()
+except Exception as _e:
+    print(f"[startup] Seed check: {_e}")
