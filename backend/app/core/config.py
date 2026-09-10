@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     app_name: str = "CareFlow AI"
     app_version: str = "1.0.0"
     debug: bool = True
+    openrouter_api_key: str = ""
 
     # CORS
     allowed_origins: list[str] = ["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"]
