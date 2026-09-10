@@ -24,7 +24,7 @@ router = APIRouter(prefix="/api/ai", tags=["ai_workflow"])
 
 @router.get("/status")
 def agent_status(
-    user=Depends(require_role("doctor", "admin"))
+    user=Depends(require_role("doctor", "admin", "lab"))
 ):
     return {
         "agent": "CareFlow AI Workflow Coordinator",
@@ -417,3 +417,42 @@ def summarize_report(
             "with the doctor."
         ),
     }
+
+
+# ============================================================
+# LIST RECENT WORKFLOWS (for frontend AI Workflow page)
+# ============================================================
+
+@router.get("/workflows")
+def list_workflows(
+    db: Session = Depends(get_db),
+    user=Depends(require_role("doctor", "lab", "admin", "receptionist", "pharmacy")),
+):
+    """Return recent AI-generated tasks as workflow instances."""
+    tasks = (
+        db.query(Task)
+        .filter(Task.status.in_(["Needs Approval", "Needs Review"]))
+        .order_by(Task.id.desc())
+        .limit(20)
+        .all()
+    )
+
+    patients = db.query(Patient).all()
+    name_by_id = {p.id: p.name for p in patients}
+
+    return [
+        {
+            "id": f"wf-{t.id}",
+            "trigger": t.title,
+            "patientId": str(t.patient_id) if t.patient_id else "",
+            "patientName": name_by_id.get(t.patient_id, "") if t.patient_id else "",
+            "status": "In Progress",
+            "createdAt": t.due_date.strftime("%d %b %Y, %H:%M") if t.due_date else "",
+            "suggestion": t.description or "",
+            "suggestionType": "review",
+            "approvalStatus": "pending",
+            "steps": [],
+            "agentActivity": [],
+        }
+        for t in tasks
+    ]

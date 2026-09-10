@@ -4,12 +4,7 @@ import { useAuth } from '@/context/AuthContext';
 import { StatusBadge, getStatusType } from '@/components/ui/StatusBadge';
 import { PageLoading, ErrorState, EmptyState } from '@/components/ui/States';
 import { Modal } from '@/components/ui/Modal';
-import {
-  CalendarDays,
-  Plus,
-  Clock,
-  Calendar,
-} from 'lucide-react';
+import { CalendarDays, Plus, Clock, Calendar, AlertCircle } from 'lucide-react';
 import type { Appointment, Patient } from '@/types';
 
 export function AppointmentsPage() {
@@ -18,14 +13,14 @@ export function AppointmentsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Real appointments from backend
   const [appointments, setAppointments] = useState<Appointment[]>([]);
-
-  // Real patients from backend / SQLite
   const [patients, setPatients] = useState<Patient[]>([]);
 
   const [filter, setFilter] = useState('all');
   const [showModal, setShowModal] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  const [formError, setFormError] = useState<string | null>(null);
 
   const [newApt, setNewApt] = useState({
     patientId: '',
@@ -36,8 +31,7 @@ export function AppointmentsPage() {
     reason: '',
   });
 
-  const canCreate =
-    user?.role === 'receptionist' || user?.role === 'doctor';
+  const canCreate = user?.role === 'receptionist' || user?.role === 'doctor';
 
   // ============================================================
   // LOAD DATA
@@ -51,7 +45,6 @@ export function AppointmentsPage() {
   const loadAppointments = async () => {
     setLoading(true);
     setError(null);
-
     try {
       const data = await api.getAppointments();
       setAppointments(data);
@@ -64,7 +57,6 @@ export function AppointmentsPage() {
 
   const loadPatients = async () => {
     try {
-      // Gets REAL patients from the backend / SQLite database
       const data = await api.getPatients();
       setPatients(data);
     } catch {
@@ -73,19 +65,57 @@ export function AppointmentsPage() {
   };
 
   // ============================================================
+  // RESET FORM
+  // ============================================================
+
+  const resetForm = () => {
+    setNewApt({
+      patientId: '',
+      doctorName: 'Dr. James Patel',
+      department: 'General Medicine',
+      date: '',
+      time: '09:00 AM',
+      reason: '',
+    });
+    setFormError(null);
+  };
+
+  // ============================================================
+  // VALIDATION
+  // ============================================================
+
+  const validateForm = (): string | null => {
+    if (!newApt.patientId) return 'Please select a patient';
+    if (!newApt.date) return 'Please select a date';
+    if (!newApt.doctorName) return 'Please select a doctor';
+    if (!newApt.department) return 'Please select a department';
+
+    // Date must not be in the past
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const chosen = new Date(newApt.date + 'T00:00:00');
+    if (isNaN(chosen.getTime())) return 'Invalid date';
+    if (chosen < today) return 'Appointment date cannot be in the past';
+
+    return null;
+  };
+
+  // ============================================================
   // CREATE APPOINTMENT
   // ============================================================
 
   const handleCreate = async () => {
-    if (!newApt.patientId || !newApt.date) {
+    setFormError(null);
+
+    const err = validateForm();
+    if (err) {
+      setFormError(err);
       return;
     }
 
-    // Find selected patient from REAL database patients
-    const patient = patients.find(
-      p => p.id === newApt.patientId
-    );
+    const patient = patients.find((p) => p.id === newApt.patientId);
 
+    setSubmitting(true);
     try {
       const created = await api.createAppointment({
         patientId: newApt.patientId,
@@ -97,21 +127,13 @@ export function AppointmentsPage() {
         reason: newApt.reason,
       });
 
-      setAppointments(prev => [...prev, created]);
-
+      setAppointments((prev) => [...prev, created]);
       setShowModal(false);
-
-      // Reset form
-      setNewApt({
-        patientId: '',
-        doctorName: 'Dr. James Patel',
-        department: 'General Medicine',
-        date: '',
-        time: '09:00 AM',
-        reason: '',
-      });
-    } catch {
-      setError('Failed to create appointment.');
+      resetForm();
+    } catch (err: any) {
+      setFormError(err?.message || 'Failed to create appointment.');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -121,24 +143,17 @@ export function AppointmentsPage() {
 
   const handleCancel = async (id: string) => {
     try {
-      await api.updateAppointment(id, {
-        status: 'Cancelled',
-      });
-
-      setAppointments(prev =>
-        prev.map(a =>
-          a.id === id
-            ? { ...a, status: 'Cancelled' }
-            : a
-        )
+      await api.updateAppointment(id, { status: 'Cancelled' });
+      setAppointments((prev) =>
+        prev.map((a) => (a.id === id ? { ...a, status: 'Cancelled' } : a))
       );
-    } catch {
-      setError('Failed to cancel appointment.');
+    } catch (err: any) {
+      setError(err?.message || 'Failed to cancel appointment.');
     }
   };
 
   // ============================================================
-  // LOADING / ERROR
+  // LOADING / ERROR SCREENS
   // ============================================================
 
   if (loading) {
@@ -159,34 +174,24 @@ export function AppointmentsPage() {
   }
 
   // ============================================================
-  // FILTER APPOINTMENTS
+  // FILTER + GROUP
   // ============================================================
 
   const filtered =
     filter === 'all'
       ? appointments
-      : appointments.filter(
-          a => a.status === filter
-        );
+      : appointments.filter((a) => a.status === filter);
 
-  // ============================================================
-  // GROUP APPOINTMENTS BY DATE
-  // ============================================================
-
-  const grouped = filtered.reduce(
-    (acc, apt) => {
-      if (!acc[apt.date]) {
-        acc[apt.date] = [];
-      }
-
-      acc[apt.date].push(apt);
-
-      return acc;
-    },
-    {} as Record<string, Appointment[]>
-  );
+  const grouped = filtered.reduce((acc, apt) => {
+    if (!acc[apt.date]) acc[apt.date] = [];
+    acc[apt.date].push(apt);
+    return acc;
+  }, {} as Record<string, Appointment[]>);
 
   const sortedDates = Object.keys(grouped).sort();
+
+  // Today's date in YYYY-MM-DD for min attr
+  const todayStr = new Date().toISOString().split('T')[0];
 
   // ============================================================
   // UI
@@ -194,17 +199,10 @@ export function AppointmentsPage() {
 
   return (
     <div className="space-y-5 animate-fade-in">
-
-      {/* ======================================================
-          HEADER
-      ====================================================== */}
-
+      {/* HEADER */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">
-            Appointments
-          </h1>
-
+          <h1 className="text-2xl font-bold text-slate-900">Appointments</h1>
           <p className="text-sm text-slate-500 mt-1">
             {appointments.length} total appointments
           </p>
@@ -212,7 +210,10 @@ export function AppointmentsPage() {
 
         {canCreate && (
           <button
-            onClick={() => setShowModal(true)}
+            onClick={() => {
+              resetForm();
+              setShowModal(true);
+            }}
             className="btn-primary flex items-center gap-2"
           >
             <Plus className="w-4 h-4" />
@@ -221,18 +222,9 @@ export function AppointmentsPage() {
         )}
       </div>
 
-      {/* ======================================================
-          FILTER TABS
-      ====================================================== */}
-
+      {/* FILTER TABS */}
       <div className="flex gap-2 flex-wrap">
-        {[
-          'all',
-          'Confirmed',
-          'Pending',
-          'Completed',
-          'Cancelled',
-        ].map(f => (
+        {['all', 'Confirmed', 'Pending', 'Completed', 'Cancelled'].map((f) => (
           <button
             key={f}
             onClick={() => setFilter(f)}
@@ -247,10 +239,7 @@ export function AppointmentsPage() {
         ))}
       </div>
 
-      {/* ======================================================
-          APPOINTMENTS LIST
-      ====================================================== */}
-
+      {/* LIST */}
       {sortedDates.length === 0 ? (
         <EmptyState
           icon={CalendarDays}
@@ -259,44 +248,25 @@ export function AppointmentsPage() {
         />
       ) : (
         <div className="space-y-5">
-
-          {sortedDates.map(date => (
+          {sortedDates.map((date) => (
             <div key={date}>
-
-              {/* DATE HEADER */}
-
               <div className="flex items-center gap-2 mb-3">
-
                 <Calendar className="w-4 h-4 text-brand-500" />
-
                 <h3 className="text-sm font-semibold text-slate-700">
-                  {new Date(date).toLocaleDateString(
-                    'en-US',
-                    {
-                      weekday: 'long',
-                      month: 'long',
-                      day: 'numeric',
-                    }
-                  )}
+                  {new Date(date + 'T00:00:00').toLocaleDateString('en-US', {
+                    weekday: 'long',
+                    month: 'long',
+                    day: 'numeric',
+                  })}
                 </h3>
-
                 <span className="text-xs text-slate-400">
-                  (
-                  {grouped[date].length}
-                  {' '}
-                  appointment
-                  {grouped[date].length > 1 ? 's' : ''}
-                  )
+                  ({grouped[date].length} appointment
+                  {grouped[date].length > 1 ? 's' : ''})
                 </span>
-
               </div>
 
-              {/* APPOINTMENTS */}
-
               <div className="card overflow-hidden">
-
                 {grouped[date].map((apt, i) => (
-
                   <div
                     key={apt.id}
                     className={`flex items-center gap-4 p-4 hover:bg-slate-50 transition-colors ${
@@ -305,49 +275,27 @@ export function AppointmentsPage() {
                         : ''
                     }`}
                   >
-
-                    {/* TIME */}
-
                     <div className="flex flex-col items-center justify-center w-16 h-16 rounded-lg bg-brand-50 text-brand-700 flex-shrink-0">
-
                       <Clock className="w-4 h-4 mb-0.5" />
-
-                      <span className="text-xs font-semibold">
-                        {apt.time}
-                      </span>
-
+                      <span className="text-xs font-semibold">{apt.time}</span>
                     </div>
 
-                    {/* PATIENT INFO */}
-
                     <div className="flex-1 min-w-0">
-
                       <p className="text-sm font-semibold text-slate-900">
                         {apt.patientName}
                       </p>
-
                       <p className="text-xs text-slate-500 mt-0.5">
-                        {apt.doctorName}
-                        {' · '}
-                        {apt.department}
+                        {apt.doctorName} · {apt.department}
                       </p>
-
                       {apt.reason && (
                         <p className="text-xs text-slate-400 mt-0.5">
                           {apt.reason}
                         </p>
                       )}
-
                     </div>
 
-                    {/* STATUS + CANCEL */}
-
                     <div className="flex items-center gap-2">
-
-                      <StatusBadge
-                        type={getStatusType(apt.status)}
-                        dot
-                      >
+                      <StatusBadge type={getStatusType(apt.status)} dot>
                         {apt.status}
                       </StatusBadge>
 
@@ -355,279 +303,195 @@ export function AppointmentsPage() {
                         apt.status !== 'Completed' &&
                         apt.status !== 'Cancelled' && (
                           <button
-                            onClick={() =>
-                              handleCancel(apt.id)
-                            }
+                            onClick={() => handleCancel(apt.id)}
                             className="text-xs text-rose-500 hover:text-rose-600 font-medium px-2 py-1 rounded hover:bg-rose-50 transition-colors"
                           >
                             Cancel
                           </button>
                         )}
-
                     </div>
-
                   </div>
-
                 ))}
-
               </div>
-
             </div>
           ))}
-
         </div>
       )}
 
-      {/* ======================================================
-          SCHEDULE APPOINTMENT MODAL
-      ====================================================== */}
-
+      {/* MODAL */}
       <Modal
         open={showModal}
-        onClose={() => setShowModal(false)}
+        onClose={() => {
+          setShowModal(false);
+          resetForm();
+        }}
         title="Schedule New Appointment"
         size="md"
       >
-
         <div className="space-y-4">
+          {/* SERVER ERROR */}
+          {formError && (
+            <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-sm text-rose-800 flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+              <span>{formError}</span>
+            </div>
+          )}
 
-          {/* ==================================================
-              PATIENT
-          ================================================== */}
-
+          {/* PATIENT */}
           <div>
-
             <label className="block text-sm font-medium text-slate-700 mb-1.5">
-              Patient *
+              Patient <span className="text-rose-500">*</span>
             </label>
-
             <select
               value={newApt.patientId}
-              onChange={e =>
-                setNewApt({
-                  ...newApt,
-                  patientId: e.target.value,
-                })
+              onChange={(e) =>
+                setNewApt({ ...newApt, patientId: e.target.value })
               }
               className="input-field"
             >
-
-              <option value="">
-                Select patient...
-              </option>
-
-              {/* REAL PATIENTS FROM SQLITE */}
-
-              {patients.map(patient => (
-                <option
-                  key={patient.id}
-                  value={patient.id}
-                >
+              <option value="">Select patient...</option>
+              {patients.map((patient) => (
+                <option key={patient.id} value={patient.id}>
                   {patient.name}
                 </option>
               ))}
-
             </select>
-
+            {patients.length === 0 && (
+              <p className="text-xs text-amber-600 mt-1">
+                No patients available. Add a patient first.
+              </p>
+            )}
           </div>
 
-          {/* ==================================================
-              DOCTOR
-          ================================================== */}
-
+          {/* DOCTOR */}
           <div>
-
             <label className="block text-sm font-medium text-slate-700 mb-1.5">
-              Doctor
+              Doctor <span className="text-rose-500">*</span>
             </label>
-
             <select
               value={newApt.doctorName}
-              onChange={e =>
-                setNewApt({
-                  ...newApt,
-                  doctorName: e.target.value,
-                })
+              onChange={(e) =>
+                setNewApt({ ...newApt, doctorName: e.target.value })
               }
               className="input-field"
             >
-
-              <option>
-                Dr. James Patel
-              </option>
-
-              <option>
-                Dr. Emily Ross
-              </option>
-
+              <option>Dr. James Patel</option>
+              <option>Dr. Emily Ross</option>
+              <option>Dr. Meera Sharma</option>
+              <option>Dr. Arjun Patel</option>
             </select>
-
           </div>
 
-          {/* ==================================================
-              DEPARTMENT
-          ================================================== */}
-
+          {/* DEPARTMENT */}
           <div>
-
             <label className="block text-sm font-medium text-slate-700 mb-1.5">
-              Department
+              Department <span className="text-rose-500">*</span>
             </label>
-
             <select
               value={newApt.department}
-              onChange={e =>
-                setNewApt({
-                  ...newApt,
-                  department: e.target.value,
-                })
+              onChange={(e) =>
+                setNewApt({ ...newApt, department: e.target.value })
               }
               className="input-field"
             >
-
-              <option>
-                General Medicine
-              </option>
-
-              <option>
-                Cardiology
-              </option>
-
-              <option>
-                Neurology
-              </option>
-
-              <option>
-                Orthopedics
-              </option>
-
+              <option>General Medicine</option>
+              <option>Cardiology</option>
+              <option>Neurology</option>
+              <option>Orthopedics</option>
+              <option>Pediatrics</option>
             </select>
-
           </div>
 
-          {/* ==================================================
-              DATE + TIME
-          ================================================== */}
-
+          {/* DATE + TIME */}
           <div className="grid grid-cols-2 gap-4">
-
-            {/* DATE */}
-
             <div>
-
               <label className="block text-sm font-medium text-slate-700 mb-1.5">
-                Date *
+                Date <span className="text-rose-500">*</span>
               </label>
-
               <input
                 type="date"
+                min={todayStr}
                 value={newApt.date}
-                onChange={e =>
-                  setNewApt({
-                    ...newApt,
-                    date: e.target.value,
-                  })
+                onChange={(e) =>
+                  setNewApt({ ...newApt, date: e.target.value })
                 }
                 className="input-field"
               />
-
             </div>
 
-            {/* TIME */}
-
             <div>
-
               <label className="block text-sm font-medium text-slate-700 mb-1.5">
                 Time
               </label>
-
               <select
                 value={newApt.time}
-                onChange={e =>
-                  setNewApt({
-                    ...newApt,
-                    time: e.target.value,
-                  })
+                onChange={(e) =>
+                  setNewApt({ ...newApt, time: e.target.value })
                 }
                 className="input-field"
               >
-
                 {[
                   '09:00 AM',
+                  '09:30 AM',
                   '10:00 AM',
                   '10:30 AM',
                   '11:00 AM',
                   '11:30 AM',
+                  '12:00 PM',
                   '01:00 PM',
                   '02:00 PM',
                   '03:00 PM',
                   '04:00 PM',
-                ].map(time => (
-                  <option
-                    key={time}
-                    value={time}
-                  >
+                  '05:00 PM',
+                ].map((time) => (
+                  <option key={time} value={time}>
                     {time}
                   </option>
                 ))}
-
               </select>
-
             </div>
-
           </div>
 
-          {/* ==================================================
-              REASON
-          ================================================== */}
-
+          {/* REASON */}
           <div>
-
             <label className="block text-sm font-medium text-slate-700 mb-1.5">
               Reason
             </label>
-
             <input
               value={newApt.reason}
-              onChange={e =>
-                setNewApt({
-                  ...newApt,
-                  reason: e.target.value,
-                })
+              onChange={(e) =>
+                setNewApt({ ...newApt, reason: e.target.value })
               }
               className="input-field"
               placeholder="Reason for visit"
+              maxLength={500}
             />
-
           </div>
 
-          {/* ==================================================
-              BUTTONS
-          ================================================== */}
-
+          {/* BUTTONS */}
           <div className="flex justify-end gap-3 pt-2">
-
             <button
-              onClick={() => setShowModal(false)}
+              type="button"
+              onClick={() => {
+                setShowModal(false);
+                resetForm();
+              }}
               className="btn-secondary"
+              disabled={submitting}
             >
               Cancel
             </button>
-
             <button
+              type="button"
               onClick={handleCreate}
               className="btn-primary"
-              disabled={!newApt.patientId || !newApt.date}
+              disabled={submitting || !newApt.patientId || !newApt.date}
             >
-              Schedule
+              {submitting ? 'Scheduling...' : 'Schedule'}
             </button>
-
           </div>
-
         </div>
-
       </Modal>
-
     </div>
   );
 }

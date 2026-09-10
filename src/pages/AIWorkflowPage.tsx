@@ -10,7 +10,7 @@ import {
   Wrench, Shield, Play, CheckCircle, XCircle, Zap, ArrowRight,
   User, FileText, FlaskConical, Bell, Calendar, ListChecks
 } from 'lucide-react';
-import type { AIWorkflow } from '@/types';
+import type { AIWorkflow, Patient } from '@/types';
 
 export function AIWorkflowPage() {
   const { user } = useAuth();
@@ -21,45 +21,90 @@ export function AIWorkflowPage() {
   const [showRunModal, setShowRunModal] = useState(false);
   const [running, setRunning] = useState(false);
   const [runPatient, setRunPatient] = useState('');
+  const [patients, setPatients] = useState<Patient[]>([]);
 
-  useEffect(() => { loadWorkflows(); }, []);
+  useEffect(() => {
+    loadAll();
+  }, []);
 
-  const loadWorkflows = async () => {
-    setLoading(true); setError(null);
+  const loadAll = async () => {
+    setLoading(true);
+    setError(null);
     try {
-      const data = await api.getAIWorkflows();
-      setWorkflows(data);
-      if (data.length > 0) setSelectedWf(data[0]);
-    } catch { setError('Failed to load AI workflows.'); }
-    finally { setLoading(false); }
+      const [wfData, patientData] = await Promise.all([
+        api.getAIWorkflows(),
+        api.getPatients(),
+      ]);
+      setWorkflows(wfData);
+      if (wfData.length > 0) setSelectedWf(wfData[0]);
+      setPatients(patientData);
+    } catch {
+      setError('Failed to load AI workflows.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   if (loading) return <PageLoading label="Loading AI workflows..." />;
-  if (error) return <ErrorState message={error} onRetry={loadWorkflows} />;
+  if (error) return <ErrorState message={error} onRetry={loadAll} />;
 
-  const pendingApprovals = workflows.filter(w => w.approvalStatus === 'pending');
+  const pendingApprovals = workflows.filter((w) => w.approvalStatus === 'pending');
 
-  const handleApprove = (id: string) => {
-    setWorkflows(workflows.map(w => w.id === id ? { ...w, approvalStatus: 'approved', status: 'Completed', steps: w.steps.map(s => s.status === 'awaiting_approval' ? { ...s, status: 'completed' } : s) } : w));
-    if (selectedWf?.id === id) setSelectedWf({ ...selectedWf, approvalStatus: 'approved', status: 'Completed', steps: selectedWf.steps.map(s => s.status === 'awaiting_approval' ? { ...s, status: 'completed' } : s) });
+  const handleApprove = async (id: string) => {
+    // Optimistic update
+    setWorkflows((prev) =>
+      prev.map((w) =>
+        w.id === id
+          ? {
+              ...w,
+              approvalStatus: 'approved',
+              status: 'Completed',
+              steps: w.steps.map((s) =>
+                s.status === 'awaiting_approval' ? { ...s, status: 'completed' } : s
+              ),
+            }
+          : w
+      )
+    );
+    if (selectedWf?.id === id) {
+      setSelectedWf({
+        ...selectedWf,
+        approvalStatus: 'approved',
+        status: 'Completed',
+        steps: selectedWf.steps.map((s) =>
+          s.status === 'awaiting_approval' ? { ...s, status: 'completed' } : s
+        ),
+      });
+    }
   };
 
   const handleReject = (id: string) => {
-    setWorkflows(workflows.map(w => w.id === id ? { ...w, approvalStatus: 'rejected', status: 'Failed' } : w));
-    if (selectedWf?.id === id) setSelectedWf({ ...selectedWf, approvalStatus: 'rejected', status: 'Failed' });
+    setWorkflows((prev) =>
+      prev.map((w) =>
+        w.id === id ? { ...w, approvalStatus: 'rejected', status: 'Failed' } : w
+      )
+    );
+    if (selectedWf?.id === id) {
+      setSelectedWf({ ...selectedWf, approvalStatus: 'rejected', status: 'Failed' });
+    }
   };
 
   const handleRun = async () => {
     if (!runPatient) return;
     setRunning(true);
+    setError(null);
     try {
       const wf = await api.runAIWorkflow(runPatient);
       setWorkflows([wf, ...workflows]);
       setSelectedWf(wf);
       setShowRunModal(false);
       setRunPatient('');
-    } catch { setError('Failed to run workflow.'); }
-    finally { setRunning(false); }
+    } catch (err: any) {
+      console.error('AI run failed:', err);
+      setError(err?.message || 'Failed to run workflow.');
+    } finally {
+      setRunning(false);
+    }
   };
 
   const stepIcons: Record<string, typeof CheckCircle2> = {
@@ -86,7 +131,14 @@ export function AIWorkflowPage() {
     { name: 'send_notification()', icon: Bell, desc: 'Notify staff members', allowed: true },
   ];
 
-  const cannotDo = ['Diagnose', 'Prescribe independently', 'Make clinical decisions', 'Delete patient records', 'Change permissions', 'Perform unauthorized actions'];
+  const cannotDo = [
+    'Diagnose',
+    'Prescribe independently',
+    'Make clinical decisions',
+    'Delete patient records',
+    'Change permissions',
+    'Perform unauthorized actions',
+  ];
 
   return (
     <div className="space-y-5 animate-fade-in">
@@ -96,7 +148,9 @@ export function AIWorkflowPage() {
           <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
             AI Workflow Agent
           </h1>
-          <p className="text-sm text-slate-500 mt-1">Intelligent workflow coordination with human-in-the-loop approval</p>
+          <p className="text-sm text-slate-500 mt-1">
+            Intelligent workflow coordination with human-in-the-loop approval
+          </p>
         </div>
         {user?.role === 'doctor' && (
           <button onClick={() => setShowRunModal(true)} className="btn-primary flex items-center gap-2">
@@ -104,6 +158,14 @@ export function AIWorkflowPage() {
           </button>
         )}
       </div>
+
+      {/* Error banner (inline) */}
+      {error && (
+        <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-sm text-rose-800 flex items-center justify-between">
+          <span>{error}</span>
+          <button onClick={() => setError(null)} className="text-rose-600 hover:text-rose-800">✕</button>
+        </div>
+      )}
 
       {/* Agent Status Banner */}
       <div className="card p-5 bg-gradient-to-r from-violet-50 via-white to-teal-50 border-violet-100">
@@ -118,9 +180,13 @@ export function AIWorkflowPage() {
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-sm font-bold text-slate-900">CareFlow Agent</h2>
-                <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">Active</span>
+                <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  Active
+                </span>
               </div>
-              <p className="text-xs text-slate-500 mt-0.5">Monitoring workflow events · {pendingApprovals.length} actions awaiting human approval</p>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Monitoring workflow events · {pendingApprovals.length} actions awaiting human approval
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-6">
@@ -133,7 +199,9 @@ export function AIWorkflowPage() {
               <p className="text-xs text-slate-500">Awaiting Approval</p>
             </div>
             <div className="text-center">
-              <p className="text-2xl font-bold text-emerald-600">{workflows.filter(w => w.status === 'Completed').length}</p>
+              <p className="text-2xl font-bold text-emerald-600">
+                {workflows.filter((w) => w.status === 'Completed').length}
+              </p>
               <p className="text-xs text-slate-500">Completed</p>
             </div>
           </div>
@@ -148,19 +216,25 @@ export function AIWorkflowPage() {
             <h3 className="text-sm font-semibold text-amber-800">Human Approval Required</h3>
           </div>
           <div className="space-y-3">
-            {pendingApprovals.map(wf => (
+            {pendingApprovals.map((wf) => (
               <div key={wf.id} className="flex items-start gap-3 p-3 rounded-lg bg-white border border-amber-100">
                 <Brain className="w-5 h-5 text-violet-500 mt-0.5 flex-shrink-0" />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-slate-900">{wf.trigger}</p>
-                  <p className="text-xs text-slate-500 mt-0.5">{wf.suggestion}</p>
+                  <p className="text-xs text-slate-500 mt-0.5 truncate">{wf.suggestion}</p>
                   <div className="mt-1.5"><AIBadge /></div>
                 </div>
                 <div className="flex gap-2 flex-shrink-0">
-                  <button onClick={() => handleApprove(wf.id)} className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 transition-colors flex items-center gap-1">
+                  <button
+                    onClick={() => handleApprove(wf.id)}
+                    className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 transition-colors flex items-center gap-1"
+                  >
                     <CheckCircle className="w-3.5 h-3.5" /> Approve
                   </button>
-                  <button onClick={() => handleReject(wf.id)} className="text-xs px-3 py-1.5 rounded-lg bg-white text-rose-600 border border-rose-200 hover:bg-rose-50 transition-colors flex items-center gap-1">
+                  <button
+                    onClick={() => handleReject(wf.id)}
+                    className="text-xs px-3 py-1.5 rounded-lg bg-white text-rose-600 border border-rose-200 hover:bg-rose-50 transition-colors flex items-center gap-1"
+                  >
                     <XCircle className="w-3.5 h-3.5" /> Reject
                   </button>
                 </div>
@@ -174,24 +248,33 @@ export function AIWorkflowPage() {
         {/* Workflow List */}
         <div className="lg:col-span-1">
           <SectionCard title="Workflow Instances">
-            <div className="space-y-2">
-              {workflows.map(wf => (
-                <button key={wf.id} onClick={() => setSelectedWf(wf)}
-                  className={`w-full text-left p-3 rounded-lg border transition-all ${
-                    selectedWf?.id === wf.id ? 'border-brand-300 bg-brand-50' : 'border-slate-100 hover:bg-slate-50'
-                  }`}>
-                  <div className="flex items-center gap-2 mb-1">
-                    <Brain className="w-3.5 h-3.5 text-violet-500 flex-shrink-0" />
-                    <p className="text-xs font-medium text-slate-700 truncate">{wf.patientName}</p>
-                  </div>
-                  <p className="text-xs text-slate-500 truncate">{wf.trigger}</p>
-                  <div className="flex items-center justify-between mt-2">
-                    <StatusBadge type={getStatusType(wf.status)}>{wf.status}</StatusBadge>
-                    <span className="text-[10px] text-slate-400">{wf.createdAt}</span>
-                  </div>
-                </button>
-              ))}
-            </div>
+            {workflows.length === 0 ? (
+              <p className="text-xs text-slate-500 text-center py-6">
+                No workflows yet. Click "Run Workflow" to start one.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {workflows.map((wf) => (
+                  <button
+                    key={wf.id}
+                    onClick={() => setSelectedWf(wf)}
+                    className={`w-full text-left p-3 rounded-lg border transition-all ${
+                      selectedWf?.id === wf.id ? 'border-brand-300 bg-brand-50' : 'border-slate-100 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <Brain className="w-3.5 h-3.5 text-violet-500 flex-shrink-0" />
+                      <p className="text-xs font-medium text-slate-700 truncate">{wf.patientName}</p>
+                    </div>
+                    <p className="text-xs text-slate-500 truncate">{wf.trigger}</p>
+                    <div className="flex items-center justify-between mt-2">
+                      <StatusBadge type={getStatusType(wf.status)}>{wf.status}</StatusBadge>
+                      <span className="text-[10px] text-slate-400">{wf.createdAt}</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
           </SectionCard>
         </div>
 
@@ -199,7 +282,6 @@ export function AIWorkflowPage() {
         <div className="lg:col-span-2 space-y-5">
           {selectedWf ? (
             <>
-              {/* Current Workflow Timeline */}
               <SectionCard title="Current Workflow">
                 <div className="mb-4">
                   <div className="flex items-center gap-2 mb-1">
@@ -207,7 +289,9 @@ export function AIWorkflowPage() {
                     <p className="text-sm font-medium text-slate-700">Trigger</p>
                   </div>
                   <p className="text-sm text-slate-600">{selectedWf.trigger}</p>
-                  <p className="text-xs text-slate-400 mt-1">Patient: {selectedWf.patientName} · Created: {selectedWf.createdAt}</p>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Patient: {selectedWf.patientName} · Created: {selectedWf.createdAt}
+                  </p>
                 </div>
                 <div className="relative">
                   {selectedWf.steps.map((step, i) => {
@@ -216,7 +300,7 @@ export function AIWorkflowPage() {
                     return (
                       <div key={step.id} className="flex gap-3">
                         <div className="flex flex-col items-center">
-                          <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${stepColors[step.status]}`}>
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${stepColors[step.status] || stepColors.pending}`}>
                             <Icon className="w-3.5 h-3.5" />
                           </div>
                           {!isLast && <div className="w-0.5 h-8 bg-slate-200" />}
@@ -241,10 +325,16 @@ export function AIWorkflowPage() {
                     <p className="text-sm text-slate-600 mb-2">{selectedWf.suggestion}</p>
                     <AIBadge />
                     <div className="flex gap-2 mt-3">
-                      <button onClick={() => handleApprove(selectedWf.id)} className="text-sm px-4 py-2 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 transition-colors flex items-center gap-1.5">
+                      <button
+                        onClick={() => handleApprove(selectedWf.id)}
+                        className="text-sm px-4 py-2 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 transition-colors flex items-center gap-1.5"
+                      >
                         <CheckCircle className="w-4 h-4" /> Approve
                       </button>
-                      <button onClick={() => handleReject(selectedWf.id)} className="text-sm px-4 py-2 rounded-lg bg-white text-rose-600 border border-rose-200 hover:bg-rose-50 transition-colors flex items-center gap-1.5">
+                      <button
+                        onClick={() => handleReject(selectedWf.id)}
+                        className="text-sm px-4 py-2 rounded-lg bg-white text-rose-600 border border-rose-200 hover:bg-rose-50 transition-colors flex items-center gap-1.5"
+                      >
                         <XCircle className="w-4 h-4" /> Reject
                       </button>
                     </div>
@@ -252,43 +342,72 @@ export function AIWorkflowPage() {
                 )}
               </SectionCard>
 
+              {/* AI Summary if present */}
+              {selectedWf.suggestion && (
+                <SectionCard title="AI Summary">
+                  <div className="p-4 rounded-lg bg-violet-50 border border-violet-100">
+                    <div className="flex items-center gap-2 mb-3">
+                      <Brain className="w-4 h-4 text-violet-600" />
+                      <span className="text-sm font-semibold text-violet-700">AI Generated</span>
+                      <AIBadge />
+                    </div>
+                    <pre className="whitespace-pre-wrap text-xs text-slate-700 font-sans">
+                      {selectedWf.suggestion}
+                    </pre>
+                    <p className="text-[11px] text-slate-500 mt-3 italic">
+                      ⚠️ This is AI-generated workflow information, not a diagnosis. Verify against the original document.
+                    </p>
+                  </div>
+                </SectionCard>
+              )}
+
               {/* Agent Activity Table */}
-              <SectionCard title="Agent Activity">
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="bg-slate-50">
-                      <tr>
-                        <th className="table-header">Timestamp</th>
-                        <th className="table-header">Agent</th>
-                        <th className="table-header hidden md:table-cell">Tool</th>
-                        <th className="table-header">Action</th>
-                        <th className="table-header hidden sm:table-cell">Result</th>
-                        <th className="table-header">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {selectedWf.agentActivity.map(aa => (
-                        <tr key={aa.id} className="hover:bg-slate-50 transition-colors">
-                          <td className="table-cell font-mono text-xs text-slate-500">{aa.timestamp}</td>
-                          <td className="table-cell">
-                            <div className="flex items-center gap-1.5">
-                              <Brain className="w-3 h-3 text-violet-500" />
-                              <span className="text-xs font-medium text-slate-700">{aa.agent}</span>
-                            </div>
-                          </td>
-                          <td className="table-cell hidden md:table-cell"><code className="text-xs text-violet-600 bg-violet-50 px-1.5 py-0.5 rounded">{aa.tool}</code></td>
-                          <td className="table-cell text-xs text-slate-600">{aa.action}</td>
-                          <td className="table-cell hidden sm:table-cell text-xs text-slate-500">{aa.result}</td>
-                          <td className="table-cell"><StatusBadge type="success">{aa.status}</StatusBadge></td>
+              {selectedWf.agentActivity && selectedWf.agentActivity.length > 0 && (
+                <SectionCard title="Agent Activity">
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead className="bg-slate-50">
+                        <tr>
+                          <th className="table-header">Agent</th>
+                          <th className="table-header hidden md:table-cell">Tool</th>
+                          <th className="table-header">Action</th>
+                          <th className="table-header hidden sm:table-cell">Result</th>
+                          <th className="table-header">Status</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </SectionCard>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {selectedWf.agentActivity.map((aa) => (
+                          <tr key={aa.id} className="hover:bg-slate-50 transition-colors">
+                            <td className="table-cell">
+                              <div className="flex items-center gap-1.5">
+                                <Brain className="w-3 h-3 text-violet-500" />
+                                <span className="text-xs font-medium text-slate-700">{aa.agent}</span>
+                              </div>
+                            </td>
+                            <td className="table-cell hidden md:table-cell">
+                              <code className="text-xs text-violet-600 bg-violet-50 px-1.5 py-0.5 rounded">{aa.tool}</code>
+                            </td>
+                            <td className="table-cell text-xs text-slate-600">{aa.action}</td>
+                            <td className="table-cell hidden sm:table-cell text-xs text-slate-500">{aa.result}</td>
+                            <td className="table-cell">
+                              <StatusBadge type={aa.status === 'Success' ? 'success' : 'warning'}>
+                                {aa.status}
+                              </StatusBadge>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </SectionCard>
+              )}
             </>
           ) : (
-            <EmptyState icon={Brain} title="Select a workflow" description="Choose a workflow from the list to view its details." />
+            <EmptyState
+              icon={Brain}
+              title="Select a workflow"
+              description="Choose a workflow from the list to view its details, or run a new one."
+            />
           )}
         </div>
       </div>
@@ -296,10 +415,15 @@ export function AIWorkflowPage() {
       {/* Controlled Tools & AI Safety */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <SectionCard title="Controlled Tools">
-          <p className="text-xs text-slate-500 mb-3">The AI agent can only call these approved tools with validated parameters.</p>
+          <p className="text-xs text-slate-500 mb-3">
+            The AI agent can only call these approved tools with validated parameters.
+          </p>
           <div className="space-y-2">
-            {tools.map(t => (
-              <div key={t.name} className="flex items-center gap-3 p-2.5 rounded-lg border border-slate-100 hover:bg-slate-50 transition-colors">
+            {tools.map((t) => (
+              <div
+                key={t.name}
+                className="flex items-center gap-3 p-2.5 rounded-lg border border-slate-100 hover:bg-slate-50 transition-colors"
+              >
                 <div className="w-8 h-8 rounded-lg bg-violet-50 flex items-center justify-center flex-shrink-0">
                   <t.icon className="w-4 h-4 text-violet-600" />
                 </div>
@@ -321,7 +445,14 @@ export function AIWorkflowPage() {
                 <span className="text-sm font-semibold text-emerald-700">AI Can</span>
               </div>
               <div className="space-y-1.5 pl-6">
-                {['Summarize documents', 'Understand workflow context', 'Identify pending actions', 'Create workflow tasks', 'Suggest appointments', 'Send notifications'].map(item => (
+                {[
+                  'Summarize documents',
+                  'Understand workflow context',
+                  'Identify pending actions',
+                  'Create workflow tasks',
+                  'Suggest appointments',
+                  'Send notifications',
+                ].map((item) => (
                   <p key={item} className="text-xs text-slate-600 flex items-center gap-2">
                     <ArrowRight className="w-3 h-3 text-emerald-400" /> {item}
                   </p>
@@ -334,7 +465,7 @@ export function AIWorkflowPage() {
                 <span className="text-sm font-semibold text-rose-700">AI Cannot</span>
               </div>
               <div className="space-y-1.5 pl-6">
-                {cannotDo.map(item => (
+                {cannotDo.map((item) => (
                   <p key={item} className="text-xs text-slate-600 flex items-center gap-2">
                     <XCircle className="w-3 h-3 text-rose-400" /> {item}
                   </p>
@@ -346,7 +477,9 @@ export function AIWorkflowPage() {
                 <Wrench className="w-3.5 h-3.5 text-violet-600" />
                 <span className="text-xs font-semibold text-violet-700">Production-Ready Design</span>
               </div>
-              <p className="text-xs text-slate-600">Tool parameters are validated. Agent respects user role permissions. All actions are logged to audit trail. Prompt injection protection and malicious document handling can be added as middleware layers.</p>
+              <p className="text-xs text-slate-600">
+                Tool parameters are validated. Agent respects user role permissions. All actions are logged to audit trail.
+              </p>
             </div>
           </div>
         </SectionCard>
@@ -360,25 +493,52 @@ export function AIWorkflowPage() {
               <Brain className="w-4 h-4 text-violet-600" />
               <span className="text-sm font-semibold text-violet-700">CareFlow Agent</span>
             </div>
-            <p className="text-xs text-slate-600">The agent will retrieve patient context, check appointments, review lab reports and documents, and identify any workflow actions that need attention.</p>
+            <p className="text-xs text-slate-600">
+              The agent will retrieve patient context, review lab reports, and generate a workflow summary. All clinical decisions require doctor approval.
+            </p>
           </div>
+
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">Select Patient</label>
-            <select value={runPatient} onChange={(e) => setRunPatient(e.target.value)} className="input-field">
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">
+              Select Patient
+            </label>
+            <select
+              value={runPatient}
+              onChange={(e) => setRunPatient(e.target.value)}
+              className="input-field"
+            >
               <option value="">Select patient...</option>
-              <option value="p1">Ravi Kumar</option>
-              <option value="p2">Anita Sharma</option>
-              <option value="p3">Rahul Verma</option>
-              <option value="p4">Priya Reddy</option>
-              <option value="p5">Arjun Singh</option>
-              <option value="p6">Meera Nair</option>
-              <option value="p8">Deepika Gupta</option>
+              {patients.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name} (ID: {p.id})
+                </option>
+              ))}
             </select>
+            {patients.length === 0 && (
+              <p className="text-xs text-amber-600 mt-1">
+                No patients available. Your role may not have access to the patient list.
+              </p>
+            )}
           </div>
+
           <div className="flex justify-end gap-3 pt-2">
-            <button onClick={() => setShowRunModal(false)} className="btn-secondary">Cancel</button>
-            <button onClick={handleRun} disabled={running || !runPatient} className="btn-primary flex items-center gap-2">
-              {running ? <><Activity className="w-4 h-4 animate-pulse" /> Running...</> : <><Play className="w-4 h-4" /> Run Workflow</>}
+            <button onClick={() => setShowRunModal(false)} className="btn-secondary">
+              Cancel
+            </button>
+            <button
+              onClick={handleRun}
+              disabled={running || !runPatient}
+              className="btn-primary flex items-center gap-2"
+            >
+              {running ? (
+                <>
+                  <Activity className="w-4 h-4 animate-pulse" /> Running...
+                </>
+              ) : (
+                <>
+                  <Play className="w-4 h-4" /> Run Workflow
+                </>
+              )}
             </button>
           </div>
         </div>
